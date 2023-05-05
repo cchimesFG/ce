@@ -30,7 +30,32 @@ SOFTWARE.
 
 namespace ce
 {
-    char16_t* to_utf16(char16_t* dst, size_t src_size, const char* src_data)
+    void to_utf16_char(char16_t*& d, const unsigned char*& s)
+    {
+        if (s[0] < 0x80)
+            *d++ = s[0], s += 1;
+        else if (s[0] < 0xe0) // 2 units, 5 + 6 = 11  bits
+            *d++ = s[0] * 64 + s[1] - 0xc0 * 64 - 0x80, s += 2;
+        else if (s[0] < 0xf0) // 3 units, 4 + 6 + 6 = 16  bits
+            *d++ = s[0] * 64 * 64 + s[1] * 64 + s[2] /*- 0xe0 * 64 * 64*/ - 0x80 * 64 - 0x80, s += 3;
+        else // 4 units, 3 + 6 + 6 + 6 = 21 bits
+            *d++ = 0xd800 - 0xf248 + s[0] * 256 + s[1] * 4 + s[2] / 16,
+            * d++ = 0xdc00 - 0x0080 + s[2] % 16 * 64 + s[3],
+            s += 4;
+    }
+
+    void to_utf16(char16_t* dst, size_t src_size, const char* src_data)
+    {
+        char16_t* d = dst;
+        const unsigned char* s = (const unsigned char*)src_data;
+        const unsigned char* f = (const unsigned char*)src_data + src_size;
+
+        while (s < f)
+            to_utf16_char(d, s);
+    }
+
+    template<class Emit, auto N>
+    void to_utf16(char16_t (&dst)[N], size_t src_size, const char* src_data, Emit emit)
     {
         char16_t* d = dst;
         const unsigned char* s = (const unsigned char*)src_data;
@@ -38,19 +63,18 @@ namespace ce
 
         while (s < f)
         {
-            if (s[0] < 0x80)
-                *d++ = s[0], s += 1;
-            else if (s[0] < 0xe0) // 2 units, 5 + 6 = 11  bits
-                *d++ = s[0] * 64 + s[1] - 0xc0 * 64 - 0x80, s += 2;
-            else if (s[0] < 0xf0) // 3 units, 4 + 6 + 6 = 16  bits
-                *d++ = s[0] * 64 * 64 + s[1] * 64 + s[2] /*- 0xe0 * 64 * 64*/ - 0x80 * 64 - 0x80, s += 3;
-            else // 4 units, 3 + 6 + 6 + 6 = 21 bits
-                *d++ = 0xd800 - 0xf248 + s[0] * 256 + s[1] * 4 + s[2] / 16,
-                *d++ = 0xdc00 - 0x0080 + s[2] % 16 * 64 + s[3],
-                s += 4;
+            if (d - dst >= N - 4)
+            {
+                *d = 0;
+                emit(d = dst);
+            }
+            to_utf16_char(d, s);
         }
-
-        return d;
+        if (d > dst)
+        {
+            *d = 0;
+            emit(dst);
+        }
     }
 
     extern "C" void* _alloca(ce::size_t);
@@ -67,8 +91,8 @@ namespace ce
             if (text == nullptr)
                 return;
 
-            CE_TO_UTF16(os_text, text);
-            OutputDebugStringW(os_text);
+            char16_t os_text[4096];
+            to_utf16(os_text, CE_STRLEN(text), text, [](void const* d) { OutputDebugStringW(static_cast<wchar_t const*>(d)); });
         }
 
         uint64_t monotonic_timestamp()
